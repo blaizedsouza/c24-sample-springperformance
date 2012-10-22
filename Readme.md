@@ -10,8 +10,8 @@ The code consists of 2 projects:
 * c24-springone-retail-demo. This is the receipt parsing demonstration I used to tune an SI flow with increasing file volumes and size.
 
 
-Both projects can be imported into SpringSource Tool Suite (STS) as an existing STS Java project. All tests can be run by clicking on 
-the relevant Java file and selecting Run As->Java Application
+Both projects can be imported into SpringSource Tool Suite (STS) or Eclipse as an existing Java project (General -> Existing Projects into Workspace).
+All tests can be run by clicking on the relevant Java file and selecting Run As -> Java Application
 
 Please see the Readme.md in the individual projects for more information.
 
