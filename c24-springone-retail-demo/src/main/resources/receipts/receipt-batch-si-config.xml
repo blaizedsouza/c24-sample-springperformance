@@ -1,0 +1,172 @@
+<!--
+ | Copyright 2012 C24 Technologies.
+ | 
+ | Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), 
+ | to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+ | and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+ |
+ | The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+ |
+ | THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ | FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL C24 TECHNOLOGIES BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+ | WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+ | SOFTWARE.
+-->
+
+<!-- ========================================================================================= -->
+<!-- Sample configuration to show hand-off between Spring Integration and Spring Batch         -->
+<!-- Uses C24's Integration Objects to parse large zip files and normalise the parsed messages -->
+<!-- All exceptions are handled in the Spring Integration flows                                -->
+<!-- @author Andrew Elmore                                                                     -->
+<!-- ========================================================================================= -->
+    
+
+<beans:beans xmlns="http://www.springframework.org/schema/batch" 
+     xmlns:int="http://www.springframework.org/schema/integration" 
+     xmlns:beans="http://www.springframework.org/schema/beans" 
+     xmlns:c24="http://schema.c24.biz/spring-core"
+     xmlns:bat-c24="http://schema.c24.biz/spring-batch"
+     xmlns:int-file="http://www.springframework.org/schema/integration/file"
+     xmlns:task="http://www.springframework.org/schema/task"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="
+     	http://schema.c24.biz/spring-core			http://schema.c24.biz/spring-core.xsd
+     	http://schema.c24.biz/spring-batch			http://schema.c24.biz/spring-batch.xsd
+        http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task.xsd
+     	http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+        http://www.springframework.org/schema/integration/file http://www.springframework.org/schema/integration/file/spring-integration-file.xsd
+        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/batch http://www.springframework.org/schema/batch/spring-batch.xsd">
+	
+	
+	<!-- ======================== -->
+    <!-- Spring Integration       -->
+    <!-- ======================== -->  
+    
+    
+    <!-- Monitor the file system for new files -->
+    <int-file:inbound-channel-adapter directory="data/xml/weeklyzip"
+                                      channel="inbound.receipt.zip"
+                                      prevent-duplicates="true"
+                                      id="filePoller"
+                                      auto-startup="false">
+    	<int:poller fixed-delay="10" max-messages-per-poll="10"/>                                      
+    </int-file:inbound-channel-adapter>
+    
+    <!-- Launch a Spring Batch job from our File payload -->
+    <!-- Send any failure exceptions to our errorChannel -->
+    <int:chain input-channel="inbound.receipt.zip" output-channel="errorChannel">
+    	<!-- Create a job launch request -->
+		<int:service-activator>
+        	<beans:bean class="org.springframework.batch.admin.integration.FileToJobLaunchRequestAdapter">
+                <beans:property name="job" ref="fileLoader" />
+        	</beans:bean>
+        </int:service-activator>
+    
+        <!-- Launch the job -->
+        <int:service-activator ref="jobMessageLauncher"/>
+        
+        <!-- Because we're using a synchronous job launch, the JobExecution will contain the final status  --> 
+        <!-- Get any exceptions that the job generated -->
+        <int:transformer expression="payload.allFailureExceptions"/>
+        <int:splitter/>   
+    </int:chain>    
+     
+	<!-- Simple logging adapters used in place of error handling channels -->
+    <int:logging-channel-adapter id="skippedChannel" logger-name="Skipped" level="ERROR" expression="payload.cause.toString()"/>
+    <int:logging-channel-adapter id="errorChannel" logger-name="Fatal" level="ERROR" expression="payload.cause.cause.toString()"/>
+
+
+
+	<!-- ======================== -->
+    <!-- Spring Batch             -->
+    <!-- ======================== -->   
+
+
+	<!-- Create a thread pool to use when parallel processing the file -->
+	<task:executor id="receiptLoadingPool" pool-size="4" rejection-policy="CALLER_RUNS"/>
+	
+	
+	<!-- The type of message we expect to parse from the file -->
+	<!-- Auto-generated by Integration Objects -->
+	<c24:model id="receiptModel" base-element="biz.c24.retaildemo.model.xml.ReceiptElement"/>
+
+	<!-- Declare an ItemReader -->
+	<!-- Rapidly split the file around lines starting with <receipt - allows us to use multiple threads to parse the file -->
+	<!-- We're reading from a UTF-8 encoded zip-file -->
+	<bat-c24:item-reader id="ioItemReader" model-ref="receiptModel" elementStartPattern="&lt;receipt.*">
+        <bat-c24:zip-file-source encoding="UTF-8"/>
+    </bat-c24:item-reader>
+    
+	<!-- Use an ItemProcessor to transform source model format to our internal format -->
+	<!-- Instantiate the auto-generated transform -->
+	<beans:bean id="receiptXmlToReceiptTransform" class="biz.c24.retaildemo.transform.ReceiptXmlToJavaTransform"/>
+	<bat-c24:transform-item-processor id="ioItemProcessor" transform-ref="receiptXmlToReceiptTransform" target-class="biz.c24.retaildemo.model.Receipt"/>
+
+	<!-- The Job. Wire together our reader, processor and writer -->
+    <job id="fileLoader">
+		<step id="parseFile">
+    		<tasklet task-executor="receiptLoadingPool" throttle-limit="4">
+    			<chunk reader="ioItemReader" processor="ioItemProcessor" writer="receiptChannelItemWriter" commit-interval="1000" processor-transactional="false" skip-limit="10">
+                     
+                    <!-- If we encounter a parsing or validation exception, we'd like to continue processing the rest of the file if possible -->   
+                    <skippable-exception-classes>
+                        <include class="org.springframework.batch.item.ParseException"/>
+                        <include class="org.springframework.batch.item.validator.ValidationException"/>
+                    </skippable-exception-classes>
+                    
+                    <listeners>
+                        <!-- Make sure that skipped exceptions are pushed back into our core error handling flow -->
+                        <listener ref="skippedExceptionChannelWriter"></listener>
+                    </listeners>
+                </chunk>
+    		</tasklet>
+    	</step>
+    </job>
+
+
+
+  	<!-- ======================== -->
+    <!-- Spring Batch proxies     -->
+    <!-- ======================== --> 
+      
+      
+    <!-- Provide an ItemWriter that creates SI messages for successfully parsed and transformed receipts -->
+    <int:gateway service-interface="org.springframework.batch.item.ItemWriter" 
+             id="receiptChannelItemWriter" 
+             default-request-channel="process-message-collection-channel" /> 
+             
+    <int:channel id="process-message-collection-channel"/>
+      
+    <!-- For efficiency, Spring Batch works in chunks. Split the chunks that the receiptChannelItemWriter has given us into individual messages -->
+    <int:splitter input-channel="process-message-collection-channel" output-channel="persistReceipts"/>
+    
+    <!-- Provide an SkipListener that creates SI messages from Exceptions and sends them to skippedChannel -->
+    <int:gateway id="skippedExceptionChannelWriter" 
+                 service-interface="org.springframework.batch.core.SkipListener" 
+                 default-request-channel="skippedChannel"/> 
+    
+
+
+	<!-- ======================== -->
+    <!-- Spring Batch boilerplate -->
+    <!-- ======================== -->    
+
+
+	<!-- We're not transactional so declare a no-op transaction manager -->
+	<beans:bean id="transactionManager" class="org.springframework.batch.support.transaction.ResourcelessTransactionManager"/>
+
+	<!-- As this is just a demo, declare an in-memory job repository -->
+	<beans:bean id="jobRepository" class="org.springframework.batch.core.repository.support.MapJobRepositoryFactoryBean"/>
+
+	<!-- Create a job launcher which kicks off tasks synchronously -->
+ 	<beans:bean id="jobLauncher" class="org.springframework.batch.core.launch.support.SimpleJobLauncher">
+    	<beans:property name="jobRepository" ref="jobRepository" />
+	</beans:bean>
+	
+	<!-- Create a mechanism for Spring Integration flows to initiate a job -->
+	<beans:bean id="jobMessageLauncher" class="org.springframework.batch.integration.launch.JobLaunchingMessageHandler">
+		<beans:constructor-arg ref="jobLauncher"/>
+	</beans:bean>
+
+</beans:beans>
