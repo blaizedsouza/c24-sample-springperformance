@@ -47,6 +47,11 @@ LargeMultiFileXmlReceiptTest
 Both the Splitter and Service Activator approaches will be problematic due to lack of memory.
 The Splitter will fail with an OOM as it attempts to split the entire file into a single Collection of Strings.
 
+Depending on your default configuration, you might need to set an upper limit on your Java heap size to trigger the OutOfMemory error.
+Adding -Xmx150M to the VM args should be sufficient; note that applying the same restriction to the Spring Batch-based examples causes 
+no such problems. Launching a Java profiler (even something like Java VisualVM) allows you to see how the memory profile of the Spring Batch 
+approach differs.
+
 
 Batch SiTest
 ------------
