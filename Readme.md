@@ -16,6 +16,8 @@ the relevant Java file and selecting Run As->Java Application
 Please see the Readme.md in the individual projects for more information.
 
 Andrew Elmore
+
 andrew.elmore@incept5.com
+
 @andrew_elmore
 

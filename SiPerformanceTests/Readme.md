@@ -20,6 +20,8 @@ The corresponding configuration files can be found under src/main/resources
 
 
 Andrew
+
 andrew.elmore@incept5.com
+
 @andrew_elmore
 

@@ -10,7 +10,7 @@ Unix/Mac OSX
 ------------
 
 Run the supplied createData.sh file in the c24-springone-retail-demo directory. It will unpack data.zip and combine the extracted data to
-to create a suitable data set.
+create a suitable data set.
 
 Windows
 -------
@@ -72,6 +72,8 @@ Unlike this project which bundles its dependencies, the full demo uses Maven to 
 The project can be found at https://github.com/C24-Technologies/c24-sample-retaildemo
 
 Andrew
-andrew.elmore@incep5.com
+
+andrew.elmore@incept5.com
+
 @andrew_elmore
 
